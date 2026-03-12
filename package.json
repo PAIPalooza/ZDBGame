@@ -1,0 +1,46 @@
+{
+  "name": "zdbgame",
+  "version": "1.0.0",
+  "description": "AI-Native Game World Demo (ZeroDB Workshop)",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "test": "node --import tsx --test __tests__/**/*.test.ts",
+    "test:coverage": "node --import tsx --test --experimental-test-coverage __tests__/**/*.test.ts"
+  },
+  "dependencies": {
+    "@types/node": "^25.5.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "autoprefixer": "^10.4.27",
+    "eslint": "^9.39.4",
+    "eslint-config-next": "^16.1.6",
+    "next": "^16.1.6",
+    "postcss": "^8.5.8",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "tailwindcss": "^4.2.1",
+    "typescript": "^5.9.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PAIPalooza/ZDBGame.git"
+  },
+  "keywords": [
+    "ai-native",
+    "game",
+    "zerodb",
+    "workshop"
+  ],
+  "author": "AINative Studio",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/PAIPalooza/ZDBGame/issues"
+  },
+  "homepage": "https://github.com/PAIPalooza/ZDBGame#readme",
+  "devDependencies": {
+    "tsx": "^4.21.0"
+  }
+}
