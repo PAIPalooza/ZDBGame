@@ -1,31 +1,40 @@
 import { NPCResponse, LoreEntry, NPCMemory } from './types';
 import { searchLore } from './lore';
 import { getMemories, storeMemory } from './memory';
+import { getRelationship, getRelationshipContext, updateRelationshipForAction } from './relationships';
 
 /**
  * Generate a deterministic NPC response based on player input
- * Uses keyword-based lore retrieval and memory context
+ * Uses keyword-based lore retrieval, memory context, and relationship status
  */
-export function generateNPCResponse(
+export async function generateNPCResponse(
   npcId: string,
   playerId: string,
   playerMessage: string
-): NPCResponse {
+): Promise<NPCResponse> {
   const normalizedMessage = playerMessage.toLowerCase().trim();
 
   // Retrieve NPC memories about this player
-  const memories = getMemories(npcId, playerId);
+  const memories = await getMemories(npcId, playerId);
 
-  // Generate response based on keywords and context
-  const { response, loreUsed } = buildResponse(normalizedMessage, memories);
+  // Get current relationship status
+  const relationship = getRelationship(npcId, playerId);
+  const relationshipContext = getRelationshipContext(relationship);
+
+  // Generate response based on keywords, memories, and relationship
+  const { response, loreUsed } = buildResponse(normalizedMessage, memories, relationshipContext);
 
   // Store memory of this conversation
-  storeConversationMemory(npcId, playerId, normalizedMessage);
+  await storeConversationMemory(npcId, playerId, normalizedMessage);
+
+  // Update relationship for conversation (small affinity boost)
+  const updatedRelationship = updateRelationshipForAction(npcId, playerId, 'ask_generic_question');
 
   return {
     response,
     loreUsed,
-    memoriesReferenced: memories
+    memoriesReferenced: memories,
+    relationshipStatus: updatedRelationship
   };
 }
 
@@ -34,7 +43,8 @@ export function generateNPCResponse(
  */
 function buildResponse(
   message: string,
-  memories: NPCMemory[]
+  memories: NPCMemory[],
+  relationshipContext: string
 ): { response: string; loreUsed: LoreEntry[] } {
   // Check for specific keywords and build appropriate response
   let response = '';
@@ -90,9 +100,10 @@ function buildResponse(
 
   // Generic greeting
   else if (message.includes('hello') || message.includes('hi') || message.includes('greetings')) {
-    response = memoryContext
-      ? memoryContext + ' Welcome back, friend. How may I assist you today?'
-      : 'Greetings, traveler. I am Elarin, the village historian. How may I help you?';
+    const greeting = memoryContext
+      ? memoryContext + ' Welcome back. How may I assist you today?'
+      : relationshipContext + ' I am Elarin, the village historian. How may I help you?';
+    response = greeting;
   }
 
   // Help query
@@ -155,42 +166,46 @@ function buildMemoryContext(memories: NPCMemory[]): string {
 /**
  * Store memory of player conversation
  */
-function storeConversationMemory(
+async function storeConversationMemory(
   npcId: string,
   playerId: string,
   message: string
-): void {
+): Promise<void> {
   // Store specific memorable questions
   if (message.includes('ember tower') || message.includes('tower')) {
-    storeMemory(npcId, playerId, 'Player asked about Ember Tower', 2);
+    await storeMemory(npcId, playerId, 'Player asked about Ember Tower', 2);
   }
-  
+
   if (message.includes('moonvale')) {
-    storeMemory(npcId, playerId, 'Player asked about Moonvale', 1);
+    await storeMemory(npcId, playerId, 'Player asked about Moonvale', 1);
   }
-  
+
   if (message.includes('wolf') || message.includes('wolves')) {
-    storeMemory(npcId, playerId, 'Player asked about wolves', 1);
+    await storeMemory(npcId, playerId, 'Player asked about wolves', 1);
   }
 }
 
 /**
  * Store memory of player action (for game events)
+ * Also updates NPC relationships based on the action
  */
-export function storeActionMemory(
+export async function storeActionMemory(
   npcId: string,
   playerId: string,
   action: string
-): void {
+): Promise<void> {
   switch (action) {
     case 'wolf_kill':
-      storeMemory(npcId, playerId, 'Player defeated wolves near Moonvale', 3);
+      await storeMemory(npcId, playerId, 'Player defeated wolves near Moonvale', 3);
+      updateRelationshipForAction(npcId, playerId, 'wolf_kill');
       break;
     case 'explore':
-      storeMemory(npcId, playerId, 'Player explored the northern forest', 1);
+      await storeMemory(npcId, playerId, 'Player explored the northern forest', 1);
+      updateRelationshipForAction(npcId, playerId, 'explore_together');
       break;
     case 'help_village':
-      storeMemory(npcId, playerId, 'Player helped the village', 2);
+      await storeMemory(npcId, playerId, 'Player helped the village', 2);
+      updateRelationshipForAction(npcId, playerId, 'help_village');
       break;
   }
 }

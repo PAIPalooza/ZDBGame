@@ -217,6 +217,9 @@ export interface GameState {
 
   /** All world events */
   worldEvents: WorldEvent[];
+
+  /** All narrative logs (optional) */
+  narrativeLogs?: NarrativeLog[];
 }
 
 /**
@@ -322,6 +325,129 @@ export interface NPCTalkRequest {
 }
 
 /**
+ * NPCRelationship represents the relationship between an NPC and a player.
+ * Tracks multiple dimensions: trust, respect, fear, and affinity.
+ *
+ * @example
+ * {
+ *   id: "b50e8400-e29b-41d4-a716-446655440006",
+ *   npcId: "650e8400-e29b-41d4-a716-446655440001",
+ *   playerId: "550e8400-e29b-41d4-a716-446655440000",
+ *   trust: 50,
+ *   respect: 60,
+ *   fear: 10,
+ *   affinity: 55,
+ *   lastUpdated: "2024-03-12T10:45:00Z"
+ * }
+ */
+export interface NPCRelationship {
+  /** Unique relationship identifier (UUID v4) */
+  id: string;
+
+  /** Reference to the NPC */
+  npcId: string;
+
+  /** Reference to the player */
+  playerId: string;
+
+  /** Trust score (0-100): How much the NPC trusts the player */
+  trust: number;
+
+  /** Respect score (0-100): How much the NPC respects the player */
+  respect: number;
+
+  /** Fear score (0-100): How much the NPC fears the player */
+  fear: number;
+
+  /** Affinity score (0-100): How much the NPC likes the player */
+  affinity: number;
+
+  /** ISO 8601 timestamp of last relationship update */
+  lastUpdated: string;
+
+  /** ISO 8601 timestamp when the relationship was created */
+  createdAt: string;
+}
+
+/**
+ * Relationship modifier for updating relationship scores
+ */
+export interface RelationshipModifier {
+  trust?: number;
+  respect?: number;
+  fear?: number;
+  affinity?: number;
+}
+
+/**
+ * NarrativeLog represents a record of player-GM conversation.
+ * This is core to Epic 4: tracking narrative history with full context.
+ *
+ * @example
+ * {
+ *   id: "c50e8400-e29b-41d4-a716-446655440007",
+ *   playerId: "550e8400-e29b-41d4-a716-446655440000",
+ *   npcId: "650e8400-e29b-41d4-a716-446655440001",
+ *   playerInput: "Tell me about Ember Tower",
+ *   gmResponse: "Ah, Ember Tower... The Ember Tower collapsed after a magical experiment went wrong.",
+ *   contextMetadata: {
+ *     loreRetrieved: ["850e8400-e29b-41d4-a716-446655440003"],
+ *     memoriesUsed: [],
+ *     responseTime: 45,
+ *     npcName: "Elarin",
+ *     location: "Moonvale"
+ *   },
+ *   createdAt: "2024-03-12T10:45:00Z"
+ * }
+ */
+export interface NarrativeLog {
+  /** Unique narrative log identifier (UUID v4) */
+  id: string;
+
+  /** Reference to the player who made the input */
+  playerId: string;
+
+  /** Reference to the NPC involved in the conversation (optional for system messages) */
+  npcId?: string;
+
+  /** The player's input message or action */
+  playerInput: string;
+
+  /** The Game Master (NPC) response */
+  gmResponse: string;
+
+  /** Context metadata about the conversation */
+  contextMetadata: NarrativeContextMetadata;
+
+  /** ISO 8601 timestamp when the narrative log was created */
+  createdAt: string;
+}
+
+/**
+ * Context metadata for narrative logs
+ * Stores information about what context was used to generate the response
+ */
+export interface NarrativeContextMetadata {
+  /** IDs of lore entries that were retrieved and used */
+  loreRetrieved: string[];
+
+  /** IDs of memories that were referenced */
+  memoriesUsed: string[];
+
+  /** Response generation time in milliseconds (optional) */
+  responseTime?: number;
+
+  /** NPC name for display purposes (optional) */
+  npcName?: string;
+
+  /** Location where the conversation took place (optional) */
+  location?: string;
+
+  /** Additional arbitrary metadata (optional) */
+  additional?: Record<string, unknown>;
+}
+
+/**
  * API Response types
  */
 
@@ -329,12 +455,56 @@ export interface NPCTalkResponse {
   npcResponse: string;
   memoryCreated: boolean;
   loreRetrieved: LoreEntry[];
+  relationshipStatus?: NPCRelationship;
 }
 
 export interface WorldStateResponse {
   worldEvents: WorldEvent[];
   playerEventCount: Record<string, number>;
   triggeredNewEvent: boolean;
+}
+
+/**
+ * Context Retrieval Engine Types
+ * For Epic 4 - Context Retrieval Engine
+ */
+
+export interface ContextRetrievalConfig {
+  maxMemories?: number;
+  maxLore?: number;
+  maxGameEvents?: number;
+  maxWorldEvents?: number;
+  recentEventsWindow?: number;
+  enableSemanticLoreSearch?: boolean;
+  memoryImportanceThreshold?: number;
+}
+
+export interface GameContext {
+  player: Player | null;
+  npc: NPC | null;
+  npcMemories: NPCMemory[];
+  relevantLore: LoreEntry[];
+  recentGameEvents: GameEvent[];
+  recentWorldEvents: WorldEvent[];
+  metadata: ContextMetadata;
+}
+
+export interface ContextMetadata {
+  timestamp: string;
+  retrievalTimeMs: number;
+  config: Required<ContextRetrievalConfig>;
+  stats: {
+    memoriesFound: number;
+    loreEntriesFound: number;
+    gameEventsFound: number;
+    worldEventsFound: number;
+  };
+}
+
+export interface FormattedContext {
+  context: GameContext;
+  formattedText: string;
+  estimatedTokens: number;
 }
 
 /**
@@ -409,5 +579,34 @@ export function isWorldEvent(obj: unknown): obj is WorldEvent {
     'name' in obj &&
     'description' in obj &&
     'timestamp' in obj
+  );
+}
+
+export function isNPCRelationship(obj: unknown): obj is NPCRelationship {
+  return (
+    typeof obj === 'object' &&
+    obj !== null &&
+    'id' in obj &&
+    'npcId' in obj &&
+    'playerId' in obj &&
+    'trust' in obj &&
+    'respect' in obj &&
+    'fear' in obj &&
+    'affinity' in obj &&
+    'lastUpdated' in obj &&
+    'createdAt' in obj
+  );
+}
+
+export function isNarrativeLog(obj: unknown): obj is NarrativeLog {
+  return (
+    typeof obj === 'object' &&
+    obj !== null &&
+    'id' in obj &&
+    'playerId' in obj &&
+    'playerInput' in obj &&
+    'gmResponse' in obj &&
+    'contextMetadata' in obj &&
+    'createdAt' in obj
   );
 }
