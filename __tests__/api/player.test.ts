@@ -3,24 +3,24 @@
  * POST /api/player/create
  * GET /api/player/current
  *
- * Refs #5
+ * Refs #3, #5
  */
 
 import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import { POST } from '@/app/api/player/create/route';
 import { GET } from '@/app/api/player/current/route';
-import { clearAllData } from '@/lib/data';
+import { clearAllData } from '@/lib/zerodb';
 import { NextRequest } from 'next/server';
 
 describe('Player API Routes', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     // Clear all data before each test
-    clearAllData();
+    await clearAllData();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     // Clean up after each test
-    clearAllData();
+    await clearAllData();
   });
 
   describe('POST /api/player/create', () => {
