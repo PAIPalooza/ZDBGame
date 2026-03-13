@@ -60,7 +60,7 @@ describe('Game Engine', () => {
             expect(event.created_at).toBeDefined();
         });
 
-        it('should create a wolf_kill event', () => {
+        it('should create a wolf_kill event (legacy, mapped to combat)', () => {
             const event = createGameplayEvent(
                 testPlayerId,
                 'wolf_kill',
@@ -68,10 +68,11 @@ describe('Game Engine', () => {
             );
 
             expect(event).toBeDefined();
-            expect(event.event_type).toBe('wolf_kill');
+            expect(event.event_type).toBe('combat'); // Mapped to new type
+            expect(event.metadata.legacyEventType).toBe('wolf_kill');
         });
 
-        it('should create a help_village event', () => {
+        it('should create a help_village event (legacy, mapped to quest)', () => {
             const event = createGameplayEvent(
                 testPlayerId,
                 'help_village',
@@ -79,10 +80,11 @@ describe('Game Engine', () => {
             );
 
             expect(event).toBeDefined();
-            expect(event.event_type).toBe('help_village');
+            expect(event.event_type).toBe('quest'); // Mapped to new type
+            expect(event.metadata.legacyEventType).toBe('help_village');
         });
 
-        it('should create an npc_conversation event', () => {
+        it('should create an npc_conversation event (legacy, mapped to conversation)', () => {
             const event = createGameplayEvent(
                 testPlayerId,
                 'npc_conversation',
@@ -90,7 +92,8 @@ describe('Game Engine', () => {
             );
 
             expect(event).toBeDefined();
-            expect(event.event_type).toBe('npc_conversation');
+            expect(event.event_type).toBe('conversation'); // Mapped to new type
+            expect(event.metadata.legacyEventType).toBe('npc_conversation');
         });
 
         it('should include custom metadata', () => {
@@ -223,7 +226,7 @@ describe('Game Engine', () => {
             expect(result.worldEvent).toBeUndefined();
         });
 
-        it('should create wolf_kill event without trigger at 1 kill', () => {
+        it('should create wolf_kill event (legacy) without trigger at 1 kill', () => {
             const result = processGameplayEvent(
                 testPlayerId,
                 'wolf_kill',
@@ -231,7 +234,8 @@ describe('Game Engine', () => {
             );
 
             expect(result.gameEvent).toBeDefined();
-            expect(result.gameEvent.event_type).toBe('wolf_kill');
+            expect(result.gameEvent.event_type).toBe('combat'); // Mapped to combat
+            expect(result.gameEvent.metadata.legacyEventType).toBe('wolf_kill');
             expect(result.worldEvent).toBeUndefined();
         });
 
@@ -299,8 +303,15 @@ describe('Game Engine', () => {
     });
 
     describe('isValidEventType', () => {
-        it('should validate correct event types', () => {
+        it('should validate new standardized event types', () => {
             expect(isValidEventType('explore')).toBe(true);
+            expect(isValidEventType('combat')).toBe(true);
+            expect(isValidEventType('conversation')).toBe(true);
+            expect(isValidEventType('quest')).toBe(true);
+            expect(isValidEventType('discovery')).toBe(true);
+        });
+
+        it('should validate legacy event types for backward compatibility', () => {
             expect(isValidEventType('wolf_kill')).toBe(true);
             expect(isValidEventType('help_village')).toBe(true);
             expect(isValidEventType('npc_conversation')).toBe(true);
@@ -310,6 +321,115 @@ describe('Game Engine', () => {
             expect(isValidEventType('invalid')).toBe(false);
             expect(isValidEventType('dragon_fight')).toBe(false);
             expect(isValidEventType('')).toBe(false);
+        });
+    });
+
+    describe('New Event Types (Refs #4)', () => {
+        it('should create combat events', () => {
+            const event = createGameplayEvent(
+                testPlayerId,
+                'combat',
+                'Player fought a goblin',
+                'Moonvale',
+                { enemyType: 'goblin' }
+            );
+
+            expect(event).toBeDefined();
+            expect(event.event_type).toBe('combat');
+            expect(event.metadata.enemyType).toBe('goblin');
+        });
+
+        it('should create conversation events', () => {
+            const event = createGameplayEvent(
+                testPlayerId,
+                'conversation',
+                'Talked to Elarin',
+                'Moonvale',
+                { npcName: 'Elarin' }
+            );
+
+            expect(event).toBeDefined();
+            expect(event.event_type).toBe('conversation');
+        });
+
+        it('should create quest events', () => {
+            const event = createGameplayEvent(
+                testPlayerId,
+                'quest',
+                'Completed village quest',
+                'Moonvale',
+                { questId: 'village_help' }
+            );
+
+            expect(event).toBeDefined();
+            expect(event.event_type).toBe('quest');
+        });
+
+        it('should create discovery events', () => {
+            const event = createGameplayEvent(
+                testPlayerId,
+                'discovery',
+                'Found ancient artifact',
+                'Ancient Ruins',
+                { itemId: 'artifact_001' }
+            );
+
+            expect(event).toBeDefined();
+            expect(event.event_type).toBe('discovery');
+            expect(event.location).toBe('Ancient Ruins');
+        });
+
+        it('should map legacy wolf_kill to combat with metadata', () => {
+            const event = createGameplayEvent(
+                testPlayerId,
+                'wolf_kill',
+                'Defeated a wolf'
+            );
+
+            expect(event.event_type).toBe('combat');
+            expect(event.metadata.legacyEventType).toBe('wolf_kill');
+        });
+
+        it('should map legacy npc_conversation to conversation', () => {
+            const event = createGameplayEvent(
+                testPlayerId,
+                'npc_conversation',
+                'Talked to NPC'
+            );
+
+            expect(event.event_type).toBe('conversation');
+            expect(event.metadata.legacyEventType).toBe('npc_conversation');
+        });
+
+        it('should map legacy help_village to quest', () => {
+            const event = createGameplayEvent(
+                testPlayerId,
+                'help_village',
+                'Helped the village'
+            );
+
+            expect(event.event_type).toBe('quest');
+            expect(event.metadata.legacyEventType).toBe('help_village');
+        });
+
+        it('should count wolf combat events correctly', () => {
+            // Create combat events with wolf as enemy
+            createGameplayEvent(testPlayerId, 'combat', 'Wolf 1', 'Moonvale', { enemyType: 'wolf' });
+            createGameplayEvent(testPlayerId, 'combat', 'Wolf 2', 'Moonvale', { enemyType: 'wolf' });
+            createGameplayEvent(testPlayerId, 'combat', 'Goblin', 'Moonvale', { enemyType: 'goblin' });
+
+            const wolfCount = countWolfKillsForPlayer(testPlayerId);
+            expect(wolfCount).toBe(2);
+        });
+
+        it('should trigger Wolf Pack Retreat with new combat events', () => {
+            // Create 3 combat events with wolf enemy
+            processGameplayEvent(testPlayerId, 'combat', 'Wolf 1', 'Moonvale', { enemyType: 'wolf' });
+            processGameplayEvent(testPlayerId, 'combat', 'Wolf 2', 'Moonvale', { enemyType: 'wolf' });
+            const result = processGameplayEvent(testPlayerId, 'combat', 'Wolf 3', 'Moonvale', { enemyType: 'wolf' });
+
+            expect(result.worldEvent).toBeDefined();
+            expect(result.worldEvent?.event_name).toBe('Wolf Pack Retreat');
         });
     });
 

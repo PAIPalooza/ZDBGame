@@ -80,6 +80,35 @@ export interface WorldEvent {
     created_at: string;
 }
 
+export interface NarrativeLog {
+    id: string;
+    player_id: string;
+    npc_id?: string;
+    player_input: string;
+    gm_response: string;
+    context_metadata: {
+        lore_retrieved: string[];
+        memories_used: string[];
+        response_time?: number;
+        npc_name?: string;
+        location?: string;
+        additional?: Record<string, any>;
+    };
+    created_at: string;
+}
+
+export interface NPCRelationship {
+    id: string;
+    npc_id: string;
+    player_id: string;
+    trust: number;
+    respect: number;
+    fear: number;
+    affinity: number;
+    last_updated: string;
+    created_at: string;
+}
+
 // ============================================================================
 // Configuration
 // ============================================================================
@@ -367,9 +396,15 @@ export function getAllNPCMemories(): NPCMemory[] {
 }
 
 // ============================================================================
-// Game Events Storage
+// Game Events Storage with Indexed File Names
 // ============================================================================
 
+/**
+ * Save a game event with indexed file naming for optimized queries
+ * File naming pattern: game_event_{playerId}_{eventType}_{timestamp}_{id}.json
+ * This allows efficient filtering by player and event type without loading all files
+ * Refs #4 (Database indexes for game_events table)
+ */
 export function saveGameEvent(event: Omit<GameEvent, 'id' | 'created_at'>): GameEvent {
     const newEvent: GameEvent = {
         ...event,
@@ -377,37 +412,93 @@ export function saveGameEvent(event: Omit<GameEvent, 'id' | 'created_at'>): Game
         created_at: new Date().toISOString(),
     };
 
-    const filePath = getDataPath(`game_event_${newEvent.id}.json`);
+    // Create indexed filename for efficient queries
+    // Format: game_event_{playerId}_{eventType}_{timestamp}_{id}.json
+    const timestamp = new Date().getTime();
+    const sanitizedEventType = event.event_type.replace(/[^a-z0-9_]/gi, '_');
+    const indexedFilename = `game_event_${event.player_id}_${sanitizedEventType}_${timestamp}_${newEvent.id}.json`;
+    const filePath = getDataPath(indexedFilename);
+
     atomicWrite(filePath, newEvent);
 
     return newEvent;
 }
 
+/**
+ * Get a single game event by ID
+ * Supports both indexed and legacy filename formats
+ */
 export function getGameEvent(eventId: string): GameEvent | null {
-    const filePath = getDataPath(`game_event_${eventId}.json`);
-    return readJSON<GameEvent>(filePath);
+    ensureDataDir();
+
+    try {
+        // Try indexed filename format first
+        const files = fs.readdirSync(DATA_DIR);
+        const matchingFile = files.find(f => f.includes(eventId) && f.startsWith('game_event_'));
+
+        if (matchingFile) {
+            return readJSON<GameEvent>(getDataPath(matchingFile));
+        }
+
+        // Fallback to legacy format
+        const legacyPath = getDataPath(`game_event_${eventId}.json`);
+        return readJSON<GameEvent>(legacyPath);
+    } catch (error) {
+        return null;
+    }
 }
 
+/**
+ * Get game events with optimized file filtering using indexed filenames
+ * Leverages filename pattern: game_event_{playerId}_{eventType}_{timestamp}_{id}.json
+ * This allows filtering at the filesystem level before loading JSON
+ * Refs #4 (Database indexes for game_events table)
+ */
 export function getGameEvents(playerId?: string, eventType?: string): GameEvent[] {
     ensureDataDir();
 
     try {
         const files = fs.readdirSync(DATA_DIR);
-        const eventFiles = files.filter(f => f.startsWith('game_event_') && f.endsWith('.json'));
 
+        // Filter files at filesystem level using indexed filename pattern
+        // Pattern: game_event_{playerId}_{eventType}_{timestamp}_{id}.json
+        let eventFiles = files.filter(f => f.startsWith('game_event_') && f.endsWith('.json'));
+
+        // Optimize: Filter by playerId using filename pattern (if provided)
+        if (playerId) {
+            eventFiles = eventFiles.filter(f => {
+                const parts = f.split('_');
+                // Check if filename contains playerId in expected position (index 2)
+                return parts.length >= 3 && parts[2] === playerId;
+            });
+        }
+
+        // Optimize: Filter by eventType using filename pattern (if provided)
+        if (eventType) {
+            const sanitizedEventType = eventType.replace(/[^a-z0-9_]/gi, '_');
+            eventFiles = eventFiles.filter(f => {
+                const parts = f.split('_');
+                // Check if filename contains eventType in expected position (index 3)
+                return parts.length >= 4 && parts[3] === sanitizedEventType;
+            });
+        }
+
+        // Load only the filtered files
         let events = eventFiles
             .map(file => readJSON<GameEvent>(getDataPath(file)))
             .filter((e): e is GameEvent => e !== null);
 
-        if (playerId) {
+        // Fallback: Additional filtering for events stored with old naming convention
+        // This ensures backward compatibility with existing data
+        if (playerId && events.some(e => e.player_id !== playerId)) {
             events = events.filter(e => e.player_id === playerId);
         }
 
-        if (eventType) {
+        if (eventType && events.some(e => e.event_type !== eventType)) {
             events = events.filter(e => e.event_type === eventType);
         }
 
-        // Sort by date (newest first)
+        // Sort by date (newest first) - timestamp is in filename but we use created_at for accuracy
         return events.sort((a, b) =>
             new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
         );
@@ -496,6 +587,8 @@ export function getDataStats(): {
     npcMemories: number;
     gameEvents: number;
     worldEvents: number;
+    npcRelationships: number;
+    narrativeLogs: number;
     totalFiles: number;
 } {
     ensureDataDir();
@@ -509,9 +602,429 @@ export function getDataStats(): {
             npcMemories: files.filter(f => f.startsWith('npc_memory_')).length,
             gameEvents: files.filter(f => f.startsWith('game_event_')).length,
             worldEvents: files.filter(f => f.startsWith('world_event_')).length,
+            npcRelationships: files.filter(f => f.startsWith('npc_relationship_')).length,
+            narrativeLogs: files.filter(f => f.startsWith('narrative_log_')).length,
             totalFiles: files.filter(f => f.endsWith('.json')).length,
         };
     } catch (error) {
         throw new Error(`Failed to get data stats: ${error}`);
+    }
+}
+
+// ============================================================================
+// NPC Relationship Storage
+// ============================================================================
+
+/**
+ * Save a new NPC relationship or get existing one
+ * Initializes with neutral scores (50 for trust/respect/affinity, 0 for fear)
+ */
+export function saveNPCRelationship(relationship: Omit<NPCRelationship, 'id' | 'created_at' | 'last_updated'>): NPCRelationship {
+    const newRelationship: NPCRelationship = {
+        ...relationship,
+        id: randomUUID(),
+        last_updated: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+    };
+
+    const filePath = getDataPath(`npc_relationship_${newRelationship.id}.json`);
+    atomicWrite(filePath, newRelationship);
+
+    return newRelationship;
+}
+
+/**
+ * Get a specific NPC relationship by ID
+ */
+export function getNPCRelationship(relationshipId: string): NPCRelationship | null {
+    const filePath = getDataPath(`npc_relationship_${relationshipId}.json`);
+    return readJSON<NPCRelationship>(filePath);
+}
+
+/**
+ * Get relationship between an NPC and player, or create a new one with neutral scores
+ */
+export function getNPCPlayerRelationship(npcId: string, playerId: string): NPCRelationship {
+    ensureDataDir();
+
+    try {
+        const files = fs.readdirSync(DATA_DIR);
+        const relationshipFiles = files.filter(f => f.startsWith('npc_relationship_') && f.endsWith('.json'));
+
+        // Find existing relationship
+        for (const file of relationshipFiles) {
+            const relationship = readJSON<NPCRelationship>(getDataPath(file));
+            if (relationship && relationship.npc_id === npcId && relationship.player_id === playerId) {
+                return relationship;
+            }
+        }
+
+        // No existing relationship found, create new one with neutral scores
+        return saveNPCRelationship({
+            npc_id: npcId,
+            player_id: playerId,
+            trust: 50,      // Neutral trust
+            respect: 50,    // Neutral respect
+            fear: 0,        // No fear initially
+            affinity: 50    // Neutral affinity
+        });
+    } catch (error) {
+        throw new Error(`Failed to get/create NPC relationship: ${error}`);
+    }
+}
+
+/**
+ * Update an existing NPC relationship
+ * Automatically clamps values to 0-100 range
+ */
+export function updateNPCRelationship(
+    npcId: string,
+    playerId: string,
+    updates: Partial<Pick<NPCRelationship, 'trust' | 'respect' | 'fear' | 'affinity'>>
+): NPCRelationship {
+    const relationship = getNPCPlayerRelationship(npcId, playerId);
+
+    // Apply updates with clamping to 0-100 range
+    const clamp = (value: number) => Math.max(0, Math.min(100, value));
+
+    const updatedRelationship: NPCRelationship = {
+        ...relationship,
+        trust: updates.trust !== undefined ? clamp(updates.trust) : relationship.trust,
+        respect: updates.respect !== undefined ? clamp(updates.respect) : relationship.respect,
+        fear: updates.fear !== undefined ? clamp(updates.fear) : relationship.fear,
+        affinity: updates.affinity !== undefined ? clamp(updates.affinity) : relationship.affinity,
+        last_updated: new Date().toISOString()
+    };
+
+    const filePath = getDataPath(`npc_relationship_${relationship.id}.json`);
+    atomicWrite(filePath, updatedRelationship);
+
+    return updatedRelationship;
+}
+
+/**
+ * Modify NPC relationship by delta values (increments/decrements)
+ * Automatically clamps final values to 0-100 range
+ */
+export function modifyNPCRelationship(
+    npcId: string,
+    playerId: string,
+    deltas: Partial<Pick<NPCRelationship, 'trust' | 'respect' | 'fear' | 'affinity'>>
+): NPCRelationship {
+    const relationship = getNPCPlayerRelationship(npcId, playerId);
+
+    return updateNPCRelationship(npcId, playerId, {
+        trust: deltas.trust !== undefined ? relationship.trust + deltas.trust : relationship.trust,
+        respect: deltas.respect !== undefined ? relationship.respect + deltas.respect : relationship.respect,
+        fear: deltas.fear !== undefined ? relationship.fear + deltas.fear : relationship.fear,
+        affinity: deltas.affinity !== undefined ? relationship.affinity + deltas.affinity : relationship.affinity
+    });
+}
+
+/**
+ * Get all relationships for a specific NPC
+ */
+export function getAllNPCRelationships(npcId: string): NPCRelationship[] {
+    ensureDataDir();
+
+    try {
+        const files = fs.readdirSync(DATA_DIR);
+        const relationshipFiles = files.filter(f => f.startsWith('npc_relationship_') && f.endsWith('.json'));
+
+        return relationshipFiles
+            .map(file => readJSON<NPCRelationship>(getDataPath(file)))
+            .filter((r): r is NPCRelationship => r !== null && r.npc_id === npcId)
+            .sort((a, b) => new Date(b.last_updated).getTime() - new Date(a.last_updated).getTime());
+    } catch (error) {
+        throw new Error(`Failed to read NPC relationships: ${error}`);
+    }
+}
+
+/**
+ * Get all relationships for a specific player
+ */
+export function getAllPlayerRelationships(playerId: string): NPCRelationship[] {
+    ensureDataDir();
+
+    try {
+        const files = fs.readdirSync(DATA_DIR);
+        const relationshipFiles = files.filter(f => f.startsWith('npc_relationship_') && f.endsWith('.json'));
+
+        return relationshipFiles
+            .map(file => readJSON<NPCRelationship>(getDataPath(file)))
+            .filter((r): r is NPCRelationship => r !== null && r.player_id === playerId)
+            .sort((a, b) => new Date(b.last_updated).getTime() - new Date(a.last_updated).getTime());
+    } catch (error) {
+        throw new Error(`Failed to read player relationships: ${error}`);
+    }
+}
+
+// ============================================================================
+// Narrative Log Storage (Epic 4)
+// ============================================================================
+
+/**
+ * Save a narrative log entry with indexed file naming for optimized queries
+ *
+ * File naming pattern: narrative_log_{playerId}_{npcId}_{timestamp}_{id}.json
+ * This allows efficient filtering by player and NPC without loading all files
+ *
+ * Records player input, GM response, and context metadata
+ * Refs #10 (Epic 4: Narrative History Storage)
+ */
+export function saveNarrativeLog(log: Omit<NarrativeLog, 'id' | 'created_at'>): NarrativeLog {
+    const newLog: NarrativeLog = {
+        ...log,
+        id: randomUUID(),
+        created_at: new Date().toISOString(),
+    };
+
+    // Create indexed filename for efficient queries
+    // Format: narrative_log_{playerId}_{npcId}_{timestamp}_{id}.json
+    const timestamp = new Date().getTime();
+    const npcPart = log.npc_id || 'system';
+    const indexedFilename = `narrative_log_${log.player_id}_${npcPart}_${timestamp}_${newLog.id}.json`;
+    const filePath = getDataPath(indexedFilename);
+
+    atomicWrite(filePath, newLog);
+
+    return newLog;
+}
+
+/**
+ * Get a specific narrative log by ID
+ * Supports both indexed and legacy filename formats
+ */
+export function getNarrativeLog(logId: string): NarrativeLog | null {
+    ensureDataDir();
+
+    try {
+        // Try indexed filename format first
+        const files = fs.readdirSync(DATA_DIR);
+        const matchingFile = files.find(f => f.includes(logId) && f.startsWith('narrative_log_'));
+
+        if (matchingFile) {
+            return readJSON<NarrativeLog>(getDataPath(matchingFile));
+        }
+
+        // Fallback to legacy format
+        const legacyPath = getDataPath(`narrative_log_${logId}.json`);
+        return readJSON<NarrativeLog>(legacyPath);
+    } catch (error) {
+        return null;
+    }
+}
+
+/**
+ * Get all narrative logs for a specific player with optimized file filtering
+ * Returns logs sorted by timestamp (newest first)
+ *
+ * Uses indexed filename pattern: narrative_log_{playerId}_{npcId}_{timestamp}_{id}.json
+ * This allows filtering at the filesystem level before loading JSON
+ * Refs #10 (Epic 4: Narrative History Storage - Performance Optimization)
+ *
+ * @param playerId - The player ID to filter by
+ * @param limit - Optional limit on number of logs to return (for pagination)
+ * @param offset - Optional offset for pagination
+ */
+export function getNarrativeLogsByPlayer(
+    playerId: string,
+    limit?: number,
+    offset: number = 0
+): NarrativeLog[] {
+    ensureDataDir();
+
+    try {
+        const files = fs.readdirSync(DATA_DIR);
+
+        // Optimize: Filter files at filesystem level using indexed filename pattern
+        // Pattern: narrative_log_{playerId}_{npcId}_{timestamp}_{id}.json
+        let logFiles = files.filter(f => f.startsWith('narrative_log_') && f.endsWith('.json'));
+
+        // Optimize: Filter by playerId using filename pattern (if possible)
+        const indexedFiles = logFiles.filter(f => {
+            const parts = f.split('_');
+            // Check if filename contains playerId in expected position (index 2)
+            return parts.length >= 5 && parts[2] === playerId;
+        });
+
+        // If we found indexed files, use those; otherwise fallback to loading all
+        const filesToLoad = indexedFiles.length > 0 ? indexedFiles : logFiles;
+
+        // Load only the filtered files
+        let logs = filesToLoad
+            .map(file => readJSON<NarrativeLog>(getDataPath(file)))
+            .filter((l): l is NarrativeLog => l !== null);
+
+        // Fallback: Additional filtering for logs stored with old naming convention
+        // This ensures backward compatibility with existing data
+        if (indexedFiles.length === 0) {
+            logs = logs.filter(l => l.player_id === playerId);
+        }
+
+        // Sort by timestamp (newest first)
+        logs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+        // Apply pagination if limit is specified
+        if (limit !== undefined) {
+            logs = logs.slice(offset, offset + limit);
+        }
+
+        return logs;
+    } catch (error) {
+        throw new Error(`Failed to read narrative logs: ${error}`);
+    }
+}
+
+/**
+ * Get narrative logs for a specific NPC-Player conversation with optimized filtering
+ * Returns logs sorted by timestamp (newest first)
+ *
+ * Uses indexed filename pattern: narrative_log_{playerId}_{npcId}_{timestamp}_{id}.json
+ * This allows filtering both by player and NPC at the filesystem level
+ * Refs #10 (Epic 4: Narrative History Storage - Performance Optimization)
+ *
+ * @param npcId - The NPC ID to filter by
+ * @param playerId - The player ID to filter by
+ * @param limit - Optional limit on number of logs to return
+ */
+export function getNarrativeLogsByNPCAndPlayer(
+    npcId: string,
+    playerId: string,
+    limit?: number
+): NarrativeLog[] {
+    ensureDataDir();
+
+    try {
+        const files = fs.readdirSync(DATA_DIR);
+
+        // Optimize: Filter files at filesystem level using indexed filename pattern
+        // Pattern: narrative_log_{playerId}_{npcId}_{timestamp}_{id}.json
+        let logFiles = files.filter(f => f.startsWith('narrative_log_') && f.endsWith('.json'));
+
+        // Optimize: Filter by playerId AND npcId using filename pattern
+        const indexedFiles = logFiles.filter(f => {
+            const parts = f.split('_');
+            // Check if filename contains both playerId and npcId in expected positions
+            return parts.length >= 5 &&
+                   parts[2] === playerId &&
+                   parts[3] === npcId;
+        });
+
+        // If we found indexed files, use those; otherwise fallback to loading all
+        const filesToLoad = indexedFiles.length > 0 ? indexedFiles : logFiles;
+
+        // Load only the filtered files
+        let logs = filesToLoad
+            .map(file => readJSON<NarrativeLog>(getDataPath(file)))
+            .filter((l): l is NarrativeLog => l !== null);
+
+        // Fallback: Additional filtering for logs stored with old naming convention
+        if (indexedFiles.length === 0) {
+            logs = logs.filter(l => l.player_id === playerId && l.npc_id === npcId);
+        }
+
+        // Sort by timestamp (newest first)
+        logs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+        // Apply limit if specified
+        if (limit !== undefined) {
+            logs = logs.slice(0, limit);
+        }
+
+        return logs;
+    } catch (error) {
+        throw new Error(`Failed to read NPC-Player narrative logs: ${error}`);
+    }
+}
+
+/**
+ * Get all narrative logs (admin function)
+ * Returns logs sorted by timestamp (newest first)
+ *
+ * @param limit - Optional limit on number of logs to return
+ */
+export function getAllNarrativeLogs(limit?: number): NarrativeLog[] {
+    ensureDataDir();
+
+    try {
+        const files = fs.readdirSync(DATA_DIR);
+        const logFiles = files.filter(f => f.startsWith('narrative_log_') && f.endsWith('.json'));
+
+        let logs = logFiles
+            .map(file => readJSON<NarrativeLog>(getDataPath(file)))
+            .filter((l): l is NarrativeLog => l !== null)
+            .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+        // Apply limit if specified
+        if (limit !== undefined) {
+            logs = logs.slice(0, limit);
+        }
+
+        return logs;
+    } catch (error) {
+        throw new Error(`Failed to read all narrative logs: ${error}`);
+    }
+}
+
+/**
+ * Get count of narrative logs for a player
+ * Useful for pagination
+ */
+export function getNarrativeLogCount(playerId: string): number {
+    ensureDataDir();
+
+    try {
+        const files = fs.readdirSync(DATA_DIR);
+        const logFiles = files.filter(f => f.startsWith('narrative_log_') && f.endsWith('.json'));
+
+        return logFiles
+            .map(file => readJSON<NarrativeLog>(getDataPath(file)))
+            .filter((l): l is NarrativeLog => l !== null && l.player_id === playerId)
+            .length;
+    } catch (error) {
+        throw new Error(`Failed to count narrative logs: ${error}`);
+    }
+}
+
+/**
+ * Search narrative logs by player input or GM response content
+ * Case-insensitive search
+ *
+ * @param playerId - The player ID to filter by
+ * @param searchTerm - The search term to match against
+ * @param limit - Optional limit on number of results
+ */
+export function searchNarrativeLogs(
+    playerId: string,
+    searchTerm: string,
+    limit?: number
+): NarrativeLog[] {
+    ensureDataDir();
+
+    try {
+        const files = fs.readdirSync(DATA_DIR);
+        const logFiles = files.filter(f => f.startsWith('narrative_log_') && f.endsWith('.json'));
+
+        const searchLower = searchTerm.toLowerCase();
+
+        let logs = logFiles
+            .map(file => readJSON<NarrativeLog>(getDataPath(file)))
+            .filter((l): l is NarrativeLog =>
+                l !== null &&
+                l.player_id === playerId &&
+                (l.player_input.toLowerCase().includes(searchLower) ||
+                 l.gm_response.toLowerCase().includes(searchLower))
+            )
+            .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+        // Apply limit if specified
+        if (limit !== undefined) {
+            logs = logs.slice(0, limit);
+        }
+
+        return logs;
+    } catch (error) {
+        throw new Error(`Failed to search narrative logs: ${error}`);
     }
 }

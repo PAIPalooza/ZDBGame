@@ -24,23 +24,48 @@ const WOLF_KILL_THRESHOLD = 3;
 const WOLF_KILL_EVENT_TYPE = 'wolf_kill';
 
 /**
+ * Valid event types for the game
+ * - explore: Player explores new areas
+ * - combat: Player engages in combat (replaces wolf_kill for generic combat)
+ * - conversation: Player talks with NPCs (replaces npc_conversation)
+ * - quest: Player completes quest objectives (replaces help_village)
+ * - discovery: Player discovers new lore, items, or secrets
+ */
+export type GameEventType = 'explore' | 'combat' | 'conversation' | 'quest' | 'discovery';
+
+/**
+ * Legacy event type mapping for backward compatibility
+ * Maps old event types to new standardized types
+ */
+const LEGACY_EVENT_TYPE_MAP: Record<string, GameEventType> = {
+    'wolf_kill': 'combat',
+    'npc_conversation': 'conversation',
+    'help_village': 'quest',
+};
+
+/**
  * Create a gameplay event
- * Tracks player actions: explore, wolf_kill, help_village, npc_conversation
+ * Tracks player actions: explore, combat, conversation, quest, discovery
  */
 export function createGameplayEvent(
     playerId: string,
-    eventType: 'explore' | 'wolf_kill' | 'help_village' | 'npc_conversation',
+    eventType: GameEventType | 'wolf_kill' | 'npc_conversation' | 'help_village',
     description: string,
     location: string = 'Moonvale',
     metadata: Record<string, any> = {}
 ): GameEvent {
+    // Convert legacy event types to new standardized types
+    const normalizedEventType = (LEGACY_EVENT_TYPE_MAP[eventType] || eventType) as GameEventType;
+
     const event = saveGameEvent({
         player_id: playerId,
-        event_type: eventType,
+        event_type: normalizedEventType,
         location,
         metadata: {
             ...metadata,
             description,
+            // Preserve legacy type for backward compatibility
+            ...(eventType !== normalizedEventType ? { legacyEventType: eventType } : {}),
         },
     });
 
@@ -49,9 +74,16 @@ export function createGameplayEvent(
 
 /**
  * Count wolf_kill events for a specific player
+ * Now counts combat events where metadata.legacyEventType === 'wolf_kill'
+ * or metadata.combatType === 'wolf'
  */
 export function countWolfKillsForPlayer(playerId: string): number {
-    return countGameEvents(playerId, WOLF_KILL_EVENT_TYPE);
+    const combatEvents = getGameEvents(playerId, 'combat');
+    return combatEvents.filter(event =>
+        event.metadata?.legacyEventType === 'wolf_kill' ||
+        event.metadata?.combatType === 'wolf' ||
+        event.metadata?.enemyType === 'wolf'
+    ).length;
 }
 
 /**
@@ -60,7 +92,7 @@ export function countWolfKillsForPlayer(playerId: string): number {
 function worldEventExistsForPlayer(eventName: string, playerId: string): boolean {
     const allWorldEvents = getWorldEvents();
     return allWorldEvents.some(
-        e => e.name === eventName && e.triggerSource === playerId
+        e => e.event_name === eventName && e.trigger_source === playerId
     );
 }
 
@@ -80,9 +112,9 @@ export function checkWolfPackRetreatTrigger(playerId: string): WorldEvent | null
     // Trigger at exactly 3 wolf kills
     if (wolfKillCount === WOLF_KILL_THRESHOLD) {
         const worldEvent = saveWorldEvent({
-            name: WOLF_PACK_RETREAT_EVENT,
+            event_name: WOLF_PACK_RETREAT_EVENT,
             description: WOLF_PACK_RETREAT_DESCRIPTION,
-            triggerSource: playerId,
+            trigger_source: playerId,
             metadata: {
                 wolf_kill_count: wolfKillCount,
                 threshold: WOLF_KILL_THRESHOLD,
@@ -101,7 +133,7 @@ export function checkWolfPackRetreatTrigger(playerId: string): WorldEvent | null
  */
 export function processGameplayEvent(
     playerId: string,
-    eventType: 'explore' | 'wolf_kill' | 'help_village' | 'npc_conversation',
+    eventType: GameEventType | 'wolf_kill' | 'npc_conversation' | 'help_village',
     description: string,
     location: string = 'Moonvale',
     metadata: Record<string, any> = {}
@@ -112,7 +144,15 @@ export function processGameplayEvent(
     // Check if this event triggers a world event
     let worldEvent: WorldEvent | undefined;
 
-    if (eventType === 'wolf_kill') {
+    // Check for wolf_kill (legacy) or combat events with wolf as enemy
+    const isWolfCombat = eventType === 'wolf_kill' ||
+        (eventType === 'combat' && (
+            metadata?.legacyEventType === 'wolf_kill' ||
+            metadata?.combatType === 'wolf' ||
+            metadata?.enemyType === 'wolf'
+        ));
+
+    if (isWolfCombat) {
         const triggered = checkWolfPackRetreatTrigger(playerId);
         if (triggered) {
             worldEvent = triggered;
@@ -145,9 +185,21 @@ export function getWolfKillProgress(playerId: string): {
 
 /**
  * Validate event type
+ * Accepts both new standardized types and legacy types for backward compatibility
  */
 export function isValidEventType(eventType: string): boolean {
-    const validTypes = ['explore', 'wolf_kill', 'help_village', 'npc_conversation'];
+    const validTypes: string[] = [
+        // New standardized event types
+        'explore',
+        'combat',
+        'conversation',
+        'quest',
+        'discovery',
+        // Legacy event types for backward compatibility
+        'wolf_kill',
+        'help_village',
+        'npc_conversation'
+    ];
     return validTypes.includes(eventType);
 }
 
