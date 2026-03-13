@@ -202,6 +202,44 @@ export function getAllPlayers(): Player[] {
 }
 
 // ============================================================================
+// NPC Storage
+// ============================================================================
+
+export function saveNPC(npc: Omit<NPC, 'id' | 'created_at'>): NPC {
+    const newNPC: NPC = {
+        ...npc,
+        id: randomUUID(),
+        personality: npc.personality || {},
+        created_at: new Date().toISOString(),
+    };
+
+    const filePath = getDataPath(`npc_${newNPC.id}.json`);
+    atomicWrite(filePath, newNPC);
+
+    return newNPC;
+}
+
+export function getNPC(npcId: string): NPC | null {
+    const filePath = getDataPath(`npc_${npcId}.json`);
+    return readJSON<NPC>(filePath);
+}
+
+export function getAllNPCs(): NPC[] {
+    ensureDataDir();
+
+    try {
+        const files = fs.readdirSync(DATA_DIR);
+        const npcFiles = files.filter(f => f.startsWith('npc_') && f.endsWith('.json'));
+
+        return npcFiles
+            .map(file => readJSON<NPC>(getDataPath(file)))
+            .filter((n): n is NPC => n !== null);
+    } catch (error) {
+        throw new Error(`Failed to read NPCs: ${error}`);
+    }
+}
+
+// ============================================================================
 // Lore Storage with Keyword Search
 // ============================================================================
 
@@ -380,6 +418,10 @@ export function getGameEvents(playerId?: string, eventType?: string): GameEvent[
 
 export function countGameEvents(playerId: string, eventType: string): number {
     return getGameEvents(playerId, eventType).length;
+}
+
+export function getAllGameEvents(): GameEvent[] {
+    return getGameEvents();
 }
 
 // ============================================================================

@@ -60,7 +60,7 @@ export function countWolfKillsForPlayer(playerId: string): number {
 function worldEventExistsForPlayer(eventName: string, playerId: string): boolean {
     const allWorldEvents = getWorldEvents();
     return allWorldEvents.some(
-        e => e.event_name === eventName && e.trigger_source === playerId
+        e => e.name === eventName && e.triggerSource === playerId
     );
 }
 
@@ -80,9 +80,9 @@ export function checkWolfPackRetreatTrigger(playerId: string): WorldEvent | null
     // Trigger at exactly 3 wolf kills
     if (wolfKillCount === WOLF_KILL_THRESHOLD) {
         const worldEvent = saveWorldEvent({
-            event_name: WOLF_PACK_RETREAT_EVENT,
+            name: WOLF_PACK_RETREAT_EVENT,
             description: WOLF_PACK_RETREAT_DESCRIPTION,
-            trigger_source: playerId,
+            triggerSource: playerId,
             metadata: {
                 wolf_kill_count: wolfKillCount,
                 threshold: WOLF_KILL_THRESHOLD,

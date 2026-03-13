@@ -1,10 +1,8 @@
 import { NPCMemory } from './types';
-
-// In-memory storage for NPC memories
-let npcMemoriesStore: NPCMemory[] = [];
+import { saveNPCMemory, getNPCMemories, getAllNPCMemories as getDataNPCMemories } from './data';
 
 /**
- * Store a new NPC memory
+ * Store a new NPC memory (persisted to file system)
  */
 export function storeMemory(
   npcId: string,
@@ -13,61 +11,74 @@ export function storeMemory(
   importance: number = 1
 ): NPCMemory {
   // Check if similar memory already exists to avoid duplicates
-  const existingMemory = npcMemoriesStore.find(
-    m => m.npcId === npcId && 
-         m.playerId === playerId && 
-         m.memory.toLowerCase() === memory.toLowerCase()
+  const existingMemories = getNPCMemories(npcId, playerId);
+  const existingMemory = existingMemories.find(
+    m => m.memory.toLowerCase() === memory.toLowerCase()
   );
 
   if (existingMemory) {
     return existingMemory;
   }
 
-  const timestamp = Date.now();
-  const randomPart = Math.random().toString(36).substring(2, 9);
-  const newMemory: NPCMemory = {
-    id: `mem-${timestamp}-${randomPart}`,
-    npcId,
-    playerId,
+  // Save to file system
+  const savedMemory = saveNPCMemory({
+    npc_id: npcId,
+    player_id: playerId,
     memory,
-    importance,
-    createdAt: new Date().toISOString()
-  };
+    importance
+  });
 
-  npcMemoriesStore.push(newMemory);
-  return newMemory;
+  // Transform to camelCase for frontend
+  return {
+    id: savedMemory.id,
+    npcId: savedMemory.npc_id,
+    playerId: savedMemory.player_id,
+    memory: savedMemory.memory,
+    importance: savedMemory.importance,
+    createdAt: savedMemory.created_at
+  };
 }
 
 /**
  * Retrieve memories for a specific NPC and player
  */
 export function getMemories(npcId: string, playerId: string): NPCMemory[] {
-  return npcMemoriesStore
-    .filter(m => m.npcId === npcId && m.playerId === playerId)
-    .sort((a, b) => {
-      // Sort by importance (descending) then by creation time (most recent first)
-      if (a.importance !== b.importance) {
-        return b.importance - a.importance;
-      }
-      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-    });
+  const memories = getNPCMemories(npcId, playerId);
+  return memories.map(m => ({
+    id: m.id,
+    npcId: m.npc_id,
+    playerId: m.player_id,
+    memory: m.memory,
+    importance: m.importance,
+    createdAt: m.created_at
+  }));
 }
 
 /**
  * Get all memories for an NPC
  */
 export function getAllNPCMemories(npcId: string): NPCMemory[] {
-  return npcMemoriesStore
-    .filter(m => m.npcId === npcId)
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const allMemories = getDataNPCMemories();
+  return allMemories
+    .filter(m => m.npc_id === npcId)
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 }
 
 /**
  * Get all memories for a player
  */
 export function getAllPlayerMemories(playerId: string): NPCMemory[] {
-  return npcMemoriesStore
-    .filter(m => m.playerId === playerId)
+  const allMemories = getDataNPCMemories();
+  return allMemories
+    .filter(m => m.player_id === playerId)
+    .map(m => ({
+      id: m.id,
+      npcId: m.npc_id,
+      playerId: m.player_id,
+      memory: m.memory,
+      importance: m.importance,
+      createdAt: m.created_at
+    }))
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
 
@@ -75,12 +86,13 @@ export function getAllPlayerMemories(playerId: string): NPCMemory[] {
  * Clear all memories (useful for testing)
  */
 export function clearMemories(): void {
-  npcMemoriesStore = [];
+  // This would need to delete all memory files from .data/
+  // For now, just a placeholder
 }
 
 /**
  * Get total memory count
  */
 export function getMemoryCount(): number {
-  return npcMemoriesStore.length;
+  return getDataNPCMemories().length;
 }

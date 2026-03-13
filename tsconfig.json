@@ -26,10 +26,14 @@
       {
         "name": "next"
       }
-    ]
+    ],
+    "paths": {
+      "@/*": ["./*"]
+    }
   },
   "include": [
     "lib/**/*",
+    "app/**/*",
     "__tests__/**/*",
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts"
